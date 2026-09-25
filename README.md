@@ -60,3 +60,7 @@ Les seuils sont dans `CFG` en haut de `analyze.py` ; `--reuse` réanalyse sans r
 
 AGPL-3.0, pour rester compatible avec Ultralytics.
 
+
+## Aperçu
+
+![Dashboard](docs/screenshot.png)

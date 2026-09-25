@@ -1,0 +1,12 @@
+﻿# fichiers exclus du depot
+.venv/
+__pycache__/
+VolleyVision/
+runs/
+results/
+*.pt
+*.onnx
+*.mp4
+*.avi
+*.mov
+.streamlit/secrets.toml

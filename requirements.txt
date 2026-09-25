@@ -1,0 +1,7 @@
+﻿ultralytics>=8.4
+streamlit>=1.40
+opencv-python
+numpy
+pandas
+altair
+yt-dlp

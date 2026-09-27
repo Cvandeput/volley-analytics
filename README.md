@@ -21,7 +21,9 @@ passe, attaque, contre), mesure sauts et déplacements, puis présente le tout d
   au filet) sont coupées, les morceaux d'un même joueur recollés, arbitres et juges de ligne écartés.
 - **Terrain** : homographie à partir des 4 coins (9 × 18 m) ; positions en mètres, vrai filet même en
   perspective, vue de fond ou de côté. Les coins sont proposés par le modèle de segmentation VolleyVision.
-- **Balle** : YOLOv8 entraîné sur une balle de volley (VolleyVision).
+- **Balle** : YOLOv8 entraîné sur une balle de volley (VolleyVision), puis suivi par pistes avec prédiction
+  de trajectoire : balles immobiles (réserve, ramasseurs) et détections isolées écartées, trous comblés
+  en suivant la courbe.
 - **Touches** : cassure de trajectoire près des mains d'un joueur ; au filet, attribution par Viterbi en
   respectant les règles (3 touches par camp, pas deux de suite pour un même joueur).
 - **Actions** : déduites de l'ordre des touches dans chaque possession ; contre = touche au filet juste après

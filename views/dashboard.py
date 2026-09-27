@@ -26,8 +26,14 @@ CFG_HELP = {
     "stitch_gap_s": "Trou maximal pour recoller deux morceaux de piste (s)",
     "stitch_speed_mps": "Vitesse maximale supposée pendant ce trou (m/s)",
     "stitch_radius_m": "Tolérance de position au recollage (m)",
-    "ball_max_jump": "Saut maximal de la balle entre deux images (part de la largeur)",
-    "ball_max_gap": "Trous de détection de la balle comblés (images)",
+    "ball_max_jump": "Déplacement maximal de la balle entre deux images tant que sa vitesse est inconnue "
+                     "(part de la largeur)",
+    "ball_gate": "Écart maximal à la position prédite par la vitesse de la balle (part de la largeur)",
+    "ball_track_gap": "Images sans détection avant de clore une piste de balle",
+    "ball_min_track": "Pistes de balle plus courtes ignorées (fausses détections isolées)",
+    "ball_static": "Piste qui bouge moins que ça : balle immobile écartée, réserve ou ramasseur (part de la largeur)",
+    "ball_spike": "Point retiré s'il s'écarte autant des courbes d'avant et d'après (part de la largeur)",
+    "ball_max_gap": "Trous de détection de la balle comblés en suivant sa courbe (images)",
     "touch_k": "Fenêtre de calcul des vitesses de balle (images)",
     "touch_min_speed": "Vitesse minimale de la balle (part de la largeur par image)",
     "touch_strike_ratio": "Accélération qui signale une frappe (rapport des vitesses)",
@@ -513,7 +519,12 @@ with tab_quality:
                     help="Le suivi crée une piste par silhouette et en perd parfois (croisements, filet). "
                          "Les morceaux d'un même joueur sont recollés ; arbitres et juges de ligne sont écartés.")
         st.markdown("#### Comment les chiffres sont obtenus")
+        if S.get("ball_static_tracks"):
+            st.caption(f"{S['ball_static_tracks']} balle(s) immobile(s) écartée(s) : ballons de réserve, "
+                       "ramasseurs, serveur avant son lancer.")
         st.markdown(
+            "- **Balle** : les détections sont reliées d'image en image en prédisant la trajectoire ; "
+            "les balles immobiles et les détections isolées sont écartées.\n"
             "- **Joueurs** : détectés image par image (squelette), suivis dans le temps, puis placés en mètres "
             "sur le terrain grâce aux 4 coins repérés. Le côté du filet donne l'équipe.\n"
             "- **Touches** : la balle change brusquement de trajectoire près des mains d'un joueur. "

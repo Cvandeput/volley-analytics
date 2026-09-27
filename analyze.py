@@ -42,8 +42,13 @@ CFG = {
     "stitch_gap_s": 2.0,          # recollage des pistes coupees : trou max
     "stitch_speed_mps": 6.0,      # vitesse max supposee pendant le trou
     "stitch_radius_m": 1.5,       # tolerance de position au recollage
-    "ball_max_jump": 0.08,        # deplacement max balle entre 2 frames (fraction largeur image)
-    "ball_max_gap": 6,            # trous de detection interpoles (frames)
+    "ball_max_jump": 0.08,        # deplacement max entre 2 images tant que la vitesse est inconnue (part de la largeur)
+    "ball_gate": 0.04,            # ecart max a la position predite par la vitesse (part de la largeur)
+    "ball_track_gap": 8,          # images sans detection avant de clore une piste de balle
+    "ball_min_track": 3,          # pistes plus courtes ignorees (fausses detections isolees)
+    "ball_static": 0.012,         # piste qui bouge moins que ca : balle immobile ecartee (part de la largeur)
+    "ball_spike": 0.02,           # point retire s'il s'ecarte autant des courbes d'avant et d'apres (part de la largeur)
+    "ball_max_gap": 6,            # trous de detection combles (images)
     "touch_k": 3,                 # fenetre (frames) des vitesses avant/apres
     "touch_min_speed": 0.004,     # vitesse mini balle (fraction largeur / frame)
     "touch_strike_ratio": 2.0,    # vitesse apres > ratio * vitesse avant = frappe
@@ -433,34 +438,123 @@ def clean_tracks(frames, fps, cfg):
 
 # ---------------------------------------------------------------- balle
 
-def select_ball(frames, W, cfg):
-    """Une position de balle par frame : meilleure confiance, avec continuite spatiale."""
-    n = len(frames)
-    track = np.full((n, 2), np.nan)
-    last, last_i = None, -10_000
+def ball_tracklets(frames, W, cfg):
+    """Relie les detections de balle d'une image a l'autre en pistes. Chaque piste predit sa
+    position suivante d'apres sa vitesse ; plusieurs balles peuvent etre suivies en meme temps."""
+    active, closed = [], []
     for i, fr in enumerate(frames):
         cands = fr["ball"]
-        if not cands:
-            continue
-        if last is not None and i - last_i <= 10:
-            limit = cfg["ball_max_jump"] * W * (i - last_i)
-            cands = [c for c in cands if math.hypot(c[0] - last[0], c[1] - last[1]) <= limit]
-            if not cands:
+        still = []
+        for t in active:
+            (closed if i - t["f"][-1] > cfg["ball_track_gap"] else still).append(t)
+        active = still
+
+        pairs = []
+        for ti, t in enumerate(active):
+            dt = i - t["f"][-1]
+            if len(t["f"]) >= 2:
+                k = -min(3, len(t["f"]))
+                v = np.subtract(t["p"][-1], t["p"][k]) / (t["f"][-1] - t["f"][k])
+                pred = np.add(t["p"][-1], v * dt)
+                gate = cfg["ball_gate"] * W * (1 + 0.5 * (dt - 1)) + 0.3 * float(np.hypot(*v)) * dt
+            else:  # vitesse encore inconnue
+                pred, gate = t["p"][-1], cfg["ball_max_jump"] * W * dt
+            for ci, c in enumerate(cands):
+                d = math.hypot(c[0] - pred[0], c[1] - pred[1])
+                if d <= gate:
+                    pairs.append((d, ti, ci))
+        used_t, used_c = set(), set()
+        for _, ti, ci in sorted(pairs):
+            if ti in used_t or ci in used_c:
                 continue
-        best = max(cands, key=lambda c: c[2])
-        track[i] = best[:2]
-        last, last_i = best, i
-    return track
+            used_t.add(ti)
+            used_c.add(ci)
+            active[ti]["f"].append(i)
+            active[ti]["p"].append(cands[ci][:2])
+            active[ti]["c"].append(cands[ci][2])
+        active += [{"f": [i], "p": [c[:2]], "c": [c[2]]} for ci, c in enumerate(cands) if ci not in used_c]
+    return closed + active
 
 
-def interpolate(track, max_gap):
+def select_ball(frames, W, cfg):
+    """Une position de balle par image : la piste en mouvement la plus sure. Les balles immobiles
+    (reserve, ramasseurs, serveur avant son lancer) et les detections isolees sont ecartees."""
+    n = len(frames)
+    track = np.full((n, 2), np.nan)
+    moving, n_static = [], 0
+    for t in ball_tracklets(frames, W, cfg):
+        if len(t["f"]) < cfg["ball_min_track"]:
+            continue
+        P = np.array(t["p"])
+        spread = float(np.percentile(np.hypot(*(P - np.median(P, axis=0)).T), 90))
+        if spread < cfg["ball_static"] * W:
+            n_static += 1
+            continue
+        moving.append(t)
+    taken = np.zeros(n, bool)
+    for t in sorted(moving, key=lambda t: -sum(t["c"])):
+        f, P = np.array(t["f"]), np.array(t["p"])
+        free = ~taken[f]  # les images deja couvertes par une piste plus sure lui restent
+        # on ne comble qu'avec des morceaux continus : pas d'alternance image par image entre deux objets
+        edges = np.flatnonzero(np.diff(np.r_[0, free.astype(int), 0]))
+        for a, b in zip(edges[::2], edges[1::2]):
+            if b - a >= cfg["ball_min_track"]:
+                track[f[a:b]] = P[a:b]
+                taken[f[a:b]] = True
+    return drop_spikes(track, cfg["ball_spike"] * W), n_static
+
+
+def drop_spikes(track, tol):
+    """Retire les points isoles qui ne suivent ni la courbe d'arrivee ni celle de depart
+    (fausse detection au milieu d'une trajectoire). Un point de touche suit la courbe d'arrivee."""
+    out = track.copy()
+    n = len(out)
+
+    def error(i):
+        valid = ~np.isnan(out[:, 0])
+        before = [j for j in range(i - 6, i) if j >= 0 and valid[j]][-5:]
+        after = [j for j in range(i + 1, i + 7) if j < n and valid[j]][:5]
+        if np.isnan(out[i, 0]) or len(before) < 3 or len(after) < 3:
+            return 0.0
+        errs = []
+        for idx in (before, after):
+            deg = 2 if len(idx) >= 4 else 1
+            pred = [np.polyval(np.polyfit(idx, out[idx, d], deg), i) for d in (0, 1)]
+            errs.append(float(np.hypot(pred[0] - out[i, 0], pred[1] - out[i, 1])))
+        return min(errs)
+
+    # passes successives : on retire le pire point de chaque voisinage, puis on recalcule autour,
+    # pour qu'un point parasite ne fasse pas tomber le vrai point d'a cote
+    err = np.array([error(i) for i in range(n)])
+    for _ in range(20):
+        bad = [i for i in np.flatnonzero(err > tol) if err[i] >= err[max(0, i - 6):i + 7].max()]
+        if not bad:
+            break
+        out[bad] = np.nan
+        for i in {j for b in bad for j in range(max(0, b - 7), min(n, b + 8))}:
+            err[i] = error(i)
+    return out
+
+
+def fill_gaps(track, max_gap, W):
+    """Comble les petits trous en suivant la courbe de la balle (parabole ajustee sur les points
+    voisins), ou en ligne droite si la balle a ete frappee pendant le trou."""
     out = track.copy()
     valid = np.where(~np.isnan(track[:, 0]))[0]
-    for a, b in zip(valid[:-1], valid[1:]):
-        if 1 < b - a <= max_gap + 1:
-            for k in range(1, b - a):
-                w = k / (b - a)
-                out[a + k] = track[a] * (1 - w) + track[b] * w
+    for k in range(len(valid) - 1):
+        a, b = valid[k], valid[k + 1]
+        if not 1 < b - a <= max_gap + 1:
+            continue
+        near = [j for j in valid[max(0, k - 3):k + 5] if a - 10 <= j <= b + 10]
+        t_new = np.arange(a + 1, b)
+        if len(near) >= 5:
+            fits = [np.polyfit(near, track[near, d], 2) for d in (0, 1)]
+            resid = max(np.abs(np.polyval(fits[d], near) - track[near, d]).max() for d in (0, 1))
+            if resid <= 0.006 * W:
+                out[a + 1:b] = np.stack([np.polyval(fits[d], t_new) for d in (0, 1)], axis=1)
+                continue
+        w = ((t_new - a) / (b - a))[:, None]
+        out[a + 1:b] = track[a] * (1 - w) + track[b] * w
     return out
 
 
@@ -844,8 +938,8 @@ def analyze(raw, court, cfg):
             for fr in range(j["start"], j["end"] + 1):
                 airborne.setdefault(fr, set()).add(pid)
 
-    ball_raw = select_ball(frames, W, cfg)
-    ball = interpolate(ball_raw, cfg["ball_max_gap"])
+    ball_raw, n_static = select_ball(frames, W, cfg)
+    ball = fill_gaps(ball_raw, cfg["ball_max_gap"], W)
     touches, orphans = detect_touches(ball, frames, airborne, fps, W, cfg)
     poss, n_rallies = build_possessions(touches, fps, cfg)
     label_actions(poss)
@@ -911,6 +1005,7 @@ def analyze(raw, court, cfg):
         "touches_per_possession": round(float(np.mean([p["touches"] for p in poss])), 2) if poss else 0,
         "possessions_suspectes": sum(1 for p in poss if p["touches"] > 3),
         "ball_detection_rate": round(float(np.mean(~np.isnan(ball_raw[:, 0]))), 3) if len(frames) else 0,
+        "ball_static_tracks": n_static,
         "players_tracked": len(rows),
         "track_ids_raw": n_raw_ids,
     }

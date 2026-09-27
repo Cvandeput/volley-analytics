@@ -1,0 +1,14 @@
+# BoT-SORT (Ultralytics) regle pour le volley : les joueurs se croisent et se masquent souvent
+# au filet, on garde donc une piste perdue plus longtemps (2 s a 30 fps au lieu de 1 s).
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.3
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True
+gmc_method: sparseOptFlow
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: False
+model: auto

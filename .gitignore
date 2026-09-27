@@ -4,6 +4,7 @@ __pycache__/
 VolleyVision/
 runs/
 results/
+uploads/
 *.pt
 *.onnx
 *.mp4
